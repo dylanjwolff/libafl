@@ -20,6 +20,12 @@ pub mod forkserver;
 #[cfg(all(feature = "std", feature = "fork", unix))]
 pub use forkserver::{Forkserver, ForkserverExecutor, TimeoutForkserverExecutor};
 
+#[cfg(all(feature = "std", feature = "fork", unix))]
+pub mod multi_forkserver;
+#[cfg(all(feature = "std", feature = "fork", unix))]
+pub use multi_forkserver::*;
+
+
 pub mod combined;
 pub use combined::CombinedExecutor;
 

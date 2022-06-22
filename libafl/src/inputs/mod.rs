@@ -1,7 +1,11 @@
 //! Inputs are the actual contents sent to a target for each exeuction.
 
+
 pub mod bytes;
 pub use bytes::BytesInput;
+
+pub mod multi;
+pub use multi::*;
 
 pub mod encoded;
 pub use encoded::*;
