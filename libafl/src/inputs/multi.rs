@@ -11,8 +11,7 @@ use crate::inputs::{BytesInput, HasBytesVec, HasTargetBytes, Input};
 use crate::bolts::fs::write_file_atomic;
 use alloc::{string::String, vec::Vec};
 use crate::{bolts::ownedref::OwnedSlice, Error};
-
-
+use crate::bolts::HasLen;
 
 pub trait AsMultiBytes {
     fn as_multi_ownd_bytes(&self) -> Vec<OwnedSlice<u8>>;
@@ -35,6 +34,27 @@ impl MultiInput {
             fields : f
         }
     }
+}
+
+//@TODO @FIXME
+impl HasBytesVec for MultiInput {
+        fn bytes(&self) -> &[u8] {
+            return self.fields[0].bytes()
+        }
+
+        fn bytes_mut(&mut self) -> &mut Vec<u8> {
+            return self.fields[0].bytes_mut()
+        }
+}
+
+impl HasLen for MultiInput {
+        fn len(&self) -> usize {
+            self.fields.iter().map(|f| f.len()).sum()
+        }
+
+        fn is_empty(&self) -> bool { 
+            self.fields.iter().all(|f| f.is_empty())
+        }
 }
 
 impl Input for MultiInput {

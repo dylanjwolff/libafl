@@ -356,6 +356,7 @@ pub struct TimeoutForkserverExecutor<E: Debug> {
     executor: E,
     timeout: TimeSpec,
     signal: Signal,
+    use_stdin: bool,
 }
 
 impl<E: Debug> TimeoutForkserverExecutor<E> {
@@ -373,6 +374,7 @@ impl<E: Debug> TimeoutForkserverExecutor<E> {
             executor,
             timeout,
             signal,
+            use_stdin: false, // @TODO should allow use of stdin
         })
     }
 }
@@ -396,7 +398,8 @@ where
 
         let mut input_iter = input.as_multi_ownd_bytes().into_iter();
         // First field goes to std-in if available via forkserver
-        if let Some(map) = &mut self.executor.shmem_mut() {
+        if self.use_stdin {
+        if  let Some(map) = &mut self.executor.shmem_mut() {
                 let target_bytes = input_iter.next()
                     .expect("should be at least on input");
                 let size = target_bytes.as_slice().len();
@@ -405,7 +408,7 @@ where
                 map.as_mut_slice()[..4].copy_from_slice(&size_in_bytes[..4]);
                 map.as_mut_slice()[SHMEM_FUZZ_HDR_SIZE..(SHMEM_FUZZ_HDR_SIZE + size)]
                     .copy_from_slice(target_bytes.as_slice());
-        }
+        }}
 
         for (input_bytes, input_file) in input_iter.zip(self.executor.input_files_mut().iter_mut()) {
             input_file.write_buf(input_bytes.as_slice())?;
@@ -481,6 +484,7 @@ where
     target: OsString,
     args: Vec<OsString>,
     input_files: Vec<InputFile>,
+    use_stdin: bool,
     forkserver: Forkserver,
     observers: OT,
     map: Option<SP::ShMem>,
@@ -567,7 +571,7 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
         let std_in_file = InputFile::create(format!(".{}.std_input", Uuid::new_v4()))
             .expect("std_in file should create");
         if self.use_stdin {
-           input_files.push( std_in_file.clone() ); // @FIXME?
+            input_files.push( std_in_file.clone() );
         }
 
         input_files.extend(self.filled_input_files.iter()
@@ -674,6 +678,7 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
             target,
             args: self.arguments.clone(),
             input_files: input_files,
+            use_stdin: self.use_stdin,
             forkserver,
             observers,
             map,
@@ -737,7 +742,7 @@ impl<'a> ForkserverExecutorBuilder<'a, StdShMemProvider> {
             arguments: vec![],
             envs: vec![],
             debug_child: false,
-            use_stdin: true,
+            use_stdin: false,
             autotokens: None,
             input_filename: None,
             shmem_provider: None,
@@ -879,6 +884,7 @@ where
 
         let mut input_iter = input.as_multi_ownd_bytes().into_iter();
         // First field goes to std-in? if available via forkserver
+        if self.use_stdin {
         if let Some(map) = &mut self.map {
                 let target_bytes = input_iter.next()
                     .expect("should be at least on input");
@@ -888,7 +894,7 @@ where
                 map.as_mut_slice()[..4].copy_from_slice(&size_in_bytes[..4]);
                 map.as_mut_slice()[SHMEM_FUZZ_HDR_SIZE..(SHMEM_FUZZ_HDR_SIZE + size)]
                     .copy_from_slice(target_bytes.as_slice());
-        }
+        }}
 
         for (input_bytes, input_file) in input_iter.zip(self.input_files_mut().iter_mut()) {
             input_file.write_buf(input_bytes.as_slice())?;
