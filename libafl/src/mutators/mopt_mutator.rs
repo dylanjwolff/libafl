@@ -642,7 +642,7 @@ where
     }
 }
 
-impl<I, MT, S> ScheduledMutator<I, MT, S> for StdMOptMutator<I, MT, S>
+impl<I, MT, S> ScheduledMutator<I, I, MT, S> for StdMOptMutator<I, MT, S>
 where
     I: Input,
     MT: MutatorsTuple<I, S>,

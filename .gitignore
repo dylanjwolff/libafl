@@ -45,3 +45,5 @@ __pycache__
 *.lafl_lock
 
 *atomic_file_testfile*
+
+tags

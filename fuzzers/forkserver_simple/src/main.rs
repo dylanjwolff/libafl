@@ -16,7 +16,7 @@ use libafl::{
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, MultiInput},
     monitors::SimpleMonitor,
-    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
+    mutators::{scheduled::havoc_mutations, tokens_mutations, MultiScheduledMutator, Tokens},
     observers::{ConstMapObserver, HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::mutational::StdMutationalStage,
@@ -199,7 +199,7 @@ pub fn main() {
 
     // Setup a mutational stage with a basic bytes mutator
     let mutator =
-        StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+        MultiScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6, vec![1]);
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     fuzzer
