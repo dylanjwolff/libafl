@@ -31,6 +31,16 @@ use libafl::bolts::shmem::UnixShMemProvider;
 #[cfg(not(target_vendor = "apple"))]
 use libafl::bolts::shmem::StdShMemProvider;
 
+use std::ffi::OsString;
+
+fn parse_env_var(env: &str) -> Result<(OsString, OsString), std::io::Error> {
+    if let Some((var, value)) = env.split_once('=') {
+        Ok((OsString::from(var), OsString::from(value.to_owned())))
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "expected <var>=<val> for env var"))
+    }
+}
+
 #[allow(clippy::similar_names)]
 pub fn main() {
     let res = Command::new("forkserver_simple")
@@ -73,9 +83,23 @@ pub fn main() {
                 .long("signal")
                 .default_value("SIGKILL"),
         )
+        .arg(
+            Arg::new("envs")
+                .long("envs")
+                .short('e')
+                .help("Environment variables passed to the target")
+                .multiple_values(true)
+                .value_parser(clap::builder::ValueParser::new(parse_env_var))
+                .takes_value(true),
+        )
         .get_matches();
 
     let corpus_dirs = vec![PathBuf::from(res.value_of("in").unwrap().to_string())];
+
+    let envs : Vec<(OsString, OsString)>= match res.get_many::<(OsString, OsString)>("envs") {
+        Some(matches) => matches.cloned().collect(),
+        None => vec![],
+    };
 
     const MAP_SIZE: usize = 65536;
 
@@ -179,6 +203,7 @@ pub fn main() {
         .autotokens(&mut tokens)
         // hardcoded? @TODO
         .parse_aug_afl_cmdline(args)
+        .envs(envs)
         .build(tuple_list!(time_observer, edges_observer, sched_edges_observer))
         .unwrap();
 

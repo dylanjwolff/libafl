@@ -6,6 +6,8 @@
 using namespace std;
 
 int main(int argc, char *argv[] )  {
+    if(const char* env_p = std::getenv("E")) 
+        printf("Env E is: %s\n", env_p);
     if(argc < 2){
         printf("No argument passed through command line.\n");  
     } else {

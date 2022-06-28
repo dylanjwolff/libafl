@@ -706,26 +706,34 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
             .map(|s| s.as_ref().to_string_lossy().into_owned())
             .collect();
 
-        assert!(self.filled_input_files.len() == 0);
-        self.filled_input_files  = self.hardcoded_input_files.iter()
-            .map(|maybef| match maybef {
-                Some(infile) => infile.clone(),
-                None => format!(".{}.cur_input", Uuid::new_v4())
-            }).collect();
+        self.init_files();
 
-        // Only support 10 args for now!
-        for n in 0..10 {
-            let token = format!("@@{}", n);
-            for i in 0..out_args.len() {
-                out_args[i] = out_args[i]
-                    .replace(&token, &self.filled_input_files[n]);
-            }
-        }
+        out_args = out_args.iter()
+            .map(|s| self.replace_filenames(s)).collect();
 
         self.arguments = out_args.into_iter()
             .map(|s| OsString::from(&s) )
             .collect::<Vec<OsString>>();
         self
+    }
+
+    fn init_files(&mut self) {
+        if self.filled_input_files.len() != 0 { return }
+        self.filled_input_files  = self.hardcoded_input_files.iter()
+            .map(|maybef| match maybef {
+                Some(infile) => infile.clone(),
+                None => format!(".{}.cur_input", Uuid::new_v4())
+            }).collect();
+    }
+
+    fn replace_filenames(&self, s : &str) -> String {
+        // Only support 10 args for now!
+        let mut new = s.to_owned();
+        for n in 0..10 {
+            let token = format!("@@{}", n);
+                 new = new.replace(&token, &self.filled_input_files[n]);
+        }
+        return new;
     }
 }
 
@@ -793,8 +801,11 @@ impl<'a> ForkserverExecutorBuilder<'a, StdShMemProvider> {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
+        self.init_files();
+        let val_replaced = self.replace_filenames(&val.as_ref().to_string_lossy());
+        let val_replaced = OsString::from(&val_replaced);
         self.envs
-            .push((key.as_ref().to_owned(), val.as_ref().to_owned()));
+            .push((key.as_ref().to_owned(), val_replaced));
         self
     }
 
@@ -806,9 +817,12 @@ impl<'a> ForkserverExecutorBuilder<'a, StdShMemProvider> {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
+        self.init_files();
         let mut res = vec![];
         for (ref key, ref val) in vars {
-            res.push((key.as_ref().to_owned(), val.as_ref().to_owned()));
+            let val_replaced = self.replace_filenames(&val.as_ref().to_string_lossy());
+            let val_replaced = OsString::from(&val_replaced);
+            res.push((key.as_ref().to_owned(), val_replaced));
         }
         self.envs.append(&mut res);
         self
