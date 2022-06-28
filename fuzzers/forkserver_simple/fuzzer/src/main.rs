@@ -16,7 +16,7 @@ use libafl::{
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, MultiInput},
     monitors::SimpleMonitor,
-    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
+    mutators::{scheduled::havoc_mutations, tokens_mutations, MultiScheduledMutator, Tokens},
     observers::{ConstMapObserver, HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::mutational::StdMutationalStage,
@@ -92,12 +92,24 @@ pub fn main() {
     shmem.write_to_env("__AFL_SHM_ID").unwrap();
     let shmem_buf = shmem.as_mut_slice();
 
+    // The coverage map shared between observer and executor
+    let mut sched_shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
+    // let the forkserver know the shmid
+    sched_shmem.write_to_env("__SCHED_SHM_ID").unwrap();
+    let sched_shmem_buf = sched_shmem.as_mut_slice();
+
+
     // Create an observation channel using the signals map
     let edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
         "shared_mem",
         shmem_buf,
     ));
 
+    // Create an observation channel using the signals map
+    let sched_edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
+        "sched_shared_mem",
+        sched_shmem_buf,
+    ));
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
@@ -106,6 +118,7 @@ pub fn main() {
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
         MaxMapFeedback::new_tracking(&edges_observer, true, false),
+        MaxMapFeedback::new_tracking(&sched_edges_observer, true, false),
         // Time feedback, this one does not need a feedback state
         TimeFeedback::new_with_observer(&time_observer)
     );
@@ -166,7 +179,7 @@ pub fn main() {
         .autotokens(&mut tokens)
         // hardcoded? @TODO
         .parse_aug_afl_cmdline(args)
-        .build(tuple_list!(time_observer, edges_observer))
+        .build(tuple_list!(time_observer, edges_observer, sched_edges_observer))
         .unwrap();
 
     let mut executor = TimeoutForkserverExecutor::with_signal(
@@ -199,7 +212,7 @@ pub fn main() {
 
     // Setup a mutational stage with a basic bytes mutator
     let mutator =
-        StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+        MultiScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6, vec![1]);
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     fuzzer

@@ -22,6 +22,10 @@ pub trait AsMultiBytesVec {
     fn as_multi_bytes_mut(&mut self) -> Vec<&mut Vec<u8>>;
 }
 
+pub trait AsMultiInput<I> {
+    fn as_multi_input_mut(&mut self) -> &mut Vec<I> where I: Input;
+    fn as_multi_input(&self) -> &Vec<I> where I: Input;
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MultiInput {
@@ -33,6 +37,15 @@ impl MultiInput {
         MultiInput {
             fields : f
         }
+    }
+}
+
+impl AsMultiInput<BytesInput> for MultiInput {
+    fn as_multi_input_mut(&mut self) -> &mut Vec<BytesInput> {
+        &mut self.fields
+    }
+    fn as_multi_input(&self) -> &Vec<BytesInput> {
+        &self.fields
     }
 }
 
