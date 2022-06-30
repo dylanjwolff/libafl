@@ -1,3 +1,5 @@
+pub mod monitor;
+
 use clap::{Arg, Command};
 use core::time::Duration;
 use libafl::{
@@ -15,7 +17,6 @@ use libafl::{
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, MultiInput},
-    monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, MultiScheduledMutator, Tokens},
     observers::{ConstMapObserver, HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
@@ -30,6 +31,7 @@ use libafl::bolts::shmem::UnixShMemProvider;
 
 #[cfg(not(target_vendor = "apple"))]
 use libafl::bolts::shmem::StdShMemProvider;
+use crate::monitor::UEMonitor;
 
 use std::ffi::OsString;
 
@@ -174,7 +176,7 @@ pub fn main() {
     .unwrap();
 
     // The Monitor trait define how the fuzzer stats are reported to the user
-    let monitor = SimpleMonitor::new(|s| println!("{}", s));
+    let monitor = UEMonitor::new(|s| println!("{}", s));
 
     // The event manager handle the various events generated during the fuzzing loop
     // such as the notification of the addition of a new item to the corpus
