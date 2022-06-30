@@ -4,14 +4,18 @@ use clap::{Arg, Command};
 use core::time::Duration;
 use libafl::{
     bolts::{
+        core_affinity::Cores,
         current_nanos,
         rands::StdRand,
         shmem::{ShMem, ShMemProvider},
         tuples::{tuple_list, Merge},
         AsMutSlice,
+        launcher::Launcher,
     },
+    monitors::{MultiMonitor, OnDiskTOMLMonitor},
     corpus::{Corpus, InMemoryCorpus, OnDiskCorpus},
     events::SimpleEventManager,
+    events::EventConfig,
     executors::multi_forkserver::{ForkserverExecutor, TimeoutForkserverExecutor},
     feedback_and_fast, feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
@@ -22,6 +26,7 @@ use libafl::{
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::mutational::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
+    Error,
 };
 use nix::sys::signal::Signal;
 use std::path::PathBuf;
@@ -98,11 +103,6 @@ pub fn main() {
 
     let corpus_dirs = vec![PathBuf::from(res.value_of("in").unwrap().to_string())];
 
-    let envs : Vec<(OsString, OsString)>= match res.get_many::<(OsString, OsString)>("envs") {
-        Some(matches) => matches.cloned().collect(),
-        None => vec![],
-    };
-
     const MAP_SIZE: usize = 65536;
 
     // The default, OS-specific privider for shared memory
@@ -112,137 +112,164 @@ pub fn main() {
     #[cfg(not(target_vendor = "apple"))]
     let mut shmem_provider = StdShMemProvider::new().unwrap();
 
-    // The coverage map shared between observer and executor
-    let mut shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
-    // let the forkserver know the shmid
-    shmem.write_to_env("__AFL_SHM_ID").unwrap();
-    let shmem_buf = shmem.as_mut_slice();
+    let mut run_client = |state: Option<_>, mut mgr, _core_id| {
+        let envs : Vec<(OsString, OsString)>= match res.get_many::<(OsString, OsString)>("envs") {
+            Some(matches) => matches.cloned().collect(),
+            None => vec![],
+        };
 
-    // The coverage map shared between observer and executor
-    let mut sched_shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
-    // let the forkserver know the shmid
-    sched_shmem.write_to_env("__SCHED_SHM_ID").unwrap();
-    let sched_shmem_buf = sched_shmem.as_mut_slice();
+        // The coverage map shared between observer and executor
+        let mut shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
+        // let the forkserver know the shmid
+        shmem.write_to_env("__AFL_SHM_ID").unwrap();
+        let shmem_buf = shmem.as_mut_slice();
+
+        // The coverage map shared between observer and executor
+        let mut sched_shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
+        // let the forkserver know the shmid
+        sched_shmem.write_to_env("__SCHED_SHM_ID").unwrap();
+        let sched_shmem_buf = sched_shmem.as_mut_slice();
 
 
-    // Create an observation channel using the signals map
-    let edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
-        "shared_mem",
-        shmem_buf,
-    ));
+        // Create an observation channel using the signals map
+        let edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
+            "shared_mem",
+            shmem_buf,
+        ));
 
-    // Create an observation channel using the signals map
-    let sched_edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
-        "sched_shared_mem",
-        sched_shmem_buf,
-    ));
-    // Create an observation channel to keep track of the execution time
-    let time_observer = TimeObserver::new("time");
+        // Create an observation channel using the signals map
+        let sched_edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
+            "sched_shared_mem",
+            sched_shmem_buf,
+        ));
+        // Create an observation channel to keep track of the execution time
+        let time_observer = TimeObserver::new("time");
 
-    // Feedback to rate the interestingness of an input
-    // This one is composed by two Feedbacks in OR
-    let mut feedback = feedback_or!(
-        // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&edges_observer, true, false),
-        MaxMapFeedback::new_tracking(&sched_edges_observer, true, false),
-        // Time feedback, this one does not need a feedback state
-        TimeFeedback::new_with_observer(&time_observer)
-    );
+        // Feedback to rate the interestingness of an input
+        // This one is composed by two Feedbacks in OR
+        let mut feedback = feedback_or!(
+            // New maximization map feedback linked to the edges observer and the feedback state
+            MaxMapFeedback::new_tracking(&edges_observer, true, false),
+            MaxMapFeedback::new_tracking(&sched_edges_observer, true, false),
+            // Time feedback, this one does not need a feedback state
+            TimeFeedback::new_with_observer(&time_observer)
+        );
 
-    // A feedback to choose if an input is a solution or not
-    // We want to do the same crash deduplication that AFL does
-    let mut objective = feedback_and_fast!(
-        // Must be a crash
-        CrashFeedback::new(),
-        // Take it onlt if trigger new coverage over crashes
-        MaxMapFeedback::<_, _, _, u8>::new(&edges_observer)
-    );
+        // A feedback to choose if an input is a solution or not
+        // We want to do the same crash deduplication that AFL does
+        let mut objective = feedback_and_fast!(
+            // Must be a crash
+            CrashFeedback::new(),
+            // Take it onlt if trigger new coverage over crashes
+            MaxMapFeedback::<_, _, _, u8>::new(&edges_observer)
+        );
 
-    // create a State from scratch
-    let mut state = StdState::new(
-        // RNG
-        StdRand::with_seed(current_nanos()),
-        // Corpus that will be evolved, we keep it in memory for performance
-        InMemoryCorpus::<MultiInput>::new(),
-        // Corpus in which we store solutions (crashes in this example),
-        // on disk so the user can get them after stopping the fuzzer
-        OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
-        // States of the feedbacks.
-        // The feedbacks can report the data that should persist in the State.
-        &mut feedback,
-        // Same for objective feedbacks
-        &mut objective,
-    )
-    .unwrap();
-
-    // The Monitor trait define how the fuzzer stats are reported to the user
-    let monitor = UEMonitor::new(|s| println!("{}", s));
-
-    // The event manager handle the various events generated during the fuzzing loop
-    // such as the notification of the addition of a new item to the corpus
-    let mut mgr = SimpleEventManager::new(monitor);
-
-    // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
-
-    // A fuzzer with feedbacks and a corpus scheduler
-    let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
-
-    // If we should debug the child
-    let debug_child = res.is_present("debug_child");
-
-    // Create the executor for the forkserver
-    let args = match res.values_of("arguments") {
-        Some(vec) => vec.map(|s| s.to_string()).collect::<Vec<String>>().to_vec(),
-        None => [].to_vec(),
-    };
-
-    let mut tokens = Tokens::new();
-    let forkserver = ForkserverExecutor::builder()
-        .program(res.value_of("executable").unwrap())
-        .debug_child(debug_child)
-        .shmem_provider(&mut shmem_provider)
-        .autotokens(&mut tokens)
-        // hardcoded? @TODO
-        .parse_aug_afl_cmdline(args)
-        .envs(envs)
-        .build(tuple_list!(time_observer, edges_observer, sched_edges_observer))
+        // create a State from scratch
+        let mut state = StdState::new(
+            // RNG
+            StdRand::with_seed(current_nanos()),
+            // Corpus that will be evolved, we keep it in memory for performance
+            InMemoryCorpus::<MultiInput>::new(),
+            // Corpus in which we store solutions (crashes in this example),
+            // on disk so the user can get them after stopping the fuzzer
+            OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
+            // States of the feedbacks.
+            // The feedbacks can report the data that should persist in the State.
+            &mut feedback,
+            // Same for objective feedbacks
+            &mut objective,
+        )
         .unwrap();
 
-    let mut executor = TimeoutForkserverExecutor::with_signal(
-        forkserver,
-        Duration::from_millis(
-            res.value_of("timeout")
-                .unwrap()
-                .to_string()
-                .parse()
-                .expect("Could not parse timeout in milliseconds"),
-        ),
-        res.value_of("signal").unwrap().parse::<Signal>().unwrap(),
-    )
-    .expect("Failed to create the executor.");
+        // The Monitor trait define how the fuzzer stats are reported to the user
+        let monitor = UEMonitor::new(|s| println!("{}", s));
 
-    // In case the corpus is empty (on first run), reset
-    if state.corpus().count() < 1 {
-        state
-            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &corpus_dirs)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "Failed to load initial corpus at {:?}: {:?}",
-                    &corpus_dirs, err
-                )
-            });
-        println!("We imported {} inputs from disk.", state.corpus().count());
+        // A minimization+queue policy to get testcasess from the corpus
+        let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
+
+        // A fuzzer with feedbacks and a corpus scheduler
+        let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
+
+        // If we should debug the child
+        let debug_child = res.is_present("debug_child");
+
+        // Create the executor for the forkserver
+        let args = match res.values_of("arguments") {
+            Some(vec) => vec.map(|s| s.to_string()).collect::<Vec<String>>().to_vec(),
+            None => [].to_vec(),
+        };
+
+        let mut tokens = Tokens::new();
+        let forkserver = ForkserverExecutor::builder()
+            .program(res.value_of("executable").unwrap())
+            .debug_child(debug_child)
+            .shmem_provider(&mut shmem_provider)
+            .autotokens(&mut tokens)
+            // hardcoded? @TODO
+            .parse_aug_afl_cmdline(args)
+            .envs(envs)
+            .build(tuple_list!(time_observer, edges_observer, sched_edges_observer))
+            .unwrap();
+
+        let mut executor = TimeoutForkserverExecutor::with_signal(
+            forkserver,
+            Duration::from_millis(
+                res.value_of("timeout")
+                    .unwrap()
+                    .to_string()
+                    .parse()
+                    .expect("Could not parse timeout in milliseconds"),
+            ),
+            res.value_of("signal").unwrap().parse::<Signal>().unwrap(),
+        )
+        .expect("Failed to create the executor.");
+
+        // In case the corpus is empty (on first run), reset
+        if state.corpus().count() < 1 {
+            state
+                .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &corpus_dirs)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to load initial corpus at {:?}: {:?}",
+                        &corpus_dirs, err
+                    )
+                });
+            println!("We imported {} inputs from disk.", state.corpus().count());
+        }
+
+        state.add_metadata(tokens);
+
+        // Setup a mutational stage with a basic bytes mutator
+        let mutator =
+            MultiScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6, vec![1]);
+        let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
+        fuzzer
+            .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
+            .expect("Error in the fuzzing loop");
+        Ok(())
+    };
+    let monitor = OnDiskTOMLMonitor::new(
+        "./fuzzer_stats.toml",
+        MultiMonitor::new(|s| println!("{}", s)),
+    );
+
+    match Launcher::builder()
+        .shmem_provider(shmem_provider)
+        .configuration(EventConfig::from_name("default"))
+        .monitor(monitor)
+        .run_client(&mut run_client)
+        .cores(&Cores::all().expect("should use all cores"))
+        .broker_port(8192)
+        .stdout_file(Some("/dev/null"))
+        .build()
+        .launch()
+    {
+        Ok(()) => (),
+        Err(Error::ShuttingDown) => println!("Fuzzing stopped by user. Good bye."),
+        Err(err) => panic!("Failed to run launcher: {:?}", err),
     }
 
-    state.add_metadata(tokens);
 
-    // Setup a mutational stage with a basic bytes mutator
-    let mutator =
-        MultiScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6, vec![1]);
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
-    fuzzer
-        .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
-        .expect("Error in the fuzzing loop");
 }
