@@ -15,13 +15,13 @@ use std::{
 
 use crate::{
     bolts::{
-        fs::{InputFile, INPUTFILE_STD},
+        fs::InputFile,
         os::{dup2, pipes::Pipe},
         shmem::{ShMem, ShMemProvider, StdShMemProvider},
         AsMutSlice, AsSlice,
     },
     executors::{Executor, ExitKind, HasObservers},
-    inputs::{HasTargetBytes, Input, MultiInput, AsMultiBytes, AsMultiBytesVec},
+    inputs::{Input, AsMultiBytes},
     mutators::Tokens,
     observers::{get_asan_runtime_flags_with_log_path, ASANBacktraceObserver, ObserversTuple},
     Error,

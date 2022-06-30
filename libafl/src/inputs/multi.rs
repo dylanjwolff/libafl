@@ -1,10 +1,10 @@
+/// Multiple Inputs
+///
+///
+
 use serde::{Serialize, Deserialize};
-use rand::{RngCore};
 use std::fs::File;
-use std::io::{Read, Write};
-use std::io;
-use walkdir::WalkDir;
-use std::path::{PathBuf, Path};
+use std::path::Path;
 use rmp_serde::{encode, decode};
 use uuid::Uuid;
 use crate::inputs::{BytesInput, HasBytesVec, HasTargetBytes, Input};
@@ -13,26 +13,37 @@ use alloc::{string::String, vec::Vec};
 use crate::{bolts::ownedref::OwnedSlice, Error};
 use crate::bolts::HasLen;
 
+/// Mutiple inputs that can be represented as bytes
 pub trait AsMultiBytes {
+    /// get owned bytes
     fn as_multi_ownd_bytes(&self) -> Vec<OwnedSlice<u8>>;
 }
 
+/// Mutiple inputs that can be represented as bytes
 pub trait AsMultiBytesVec {
+    /// get bytes
     fn as_multi_bytes(&self) -> Vec<&[u8]>;
+    /// get mut bytes
     fn as_multi_bytes_mut(&mut self) -> Vec<&mut Vec<u8>>;
 }
 
+/// Can be represented as multiple inputs of the same type for different mutations etc.
 pub trait AsMultiInput<I> {
+    /// can be represented as e.g. vec of BytesInput
     fn as_multi_input_mut(&mut self) -> &mut Vec<I> where I: Input;
+    /// can be represented as e.g. vec of BytesInput
     fn as_multi_input(&self) -> &Vec<I> where I: Input;
 }
 
+/// Multiple BytesInput inputs
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MultiInput {
+    /// the inputs
     pub fields: Vec<BytesInput>,
 }
 
 impl MultiInput {
+    /// create a multi-input
     pub fn new(f : Vec<BytesInput>) -> MultiInput {
         MultiInput {
             fields : f

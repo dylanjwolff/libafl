@@ -15,7 +15,6 @@ use crate::{
     },
     corpus::Corpus,
     inputs::Input,
-    inputs::MultiInput,
     inputs::AsMultiInput,
     mutators::{MutationResult, Mutator, MutatorsTuple},
     state::{HasCorpus, HasMetadata, HasRand},

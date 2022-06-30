@@ -4,6 +4,7 @@
 pub mod bytes;
 pub use bytes::BytesInput;
 
+/// multi input
 pub mod multi;
 pub use multi::*;
 
